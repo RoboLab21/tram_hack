@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 """
-ROS 2 нода резервной одометрии для регламента хакатона.
-
-Подписывается на:
+Subscribe:
     /vehicle/front_bogie_velocity (tram_vehicle_msgs/msg/VelocitySensor)
     /vehicle/rear_bogie_velocity  (tram_vehicle_msgs/msg/VelocitySensor)
     /vehicle/driver_position_cmd  (tram_vehicle_msgs/msg/DriverControllerCommand)
 
-Публикует:
+Publish:
     /result/velocity (tram_vehicle_msgs/msg/VelocitySensor)
     /result/position (nav_msgs/msg/Odometry)
-
-Строго соблюдает регламент:
-1. header.stamp заполняется временем входящего сообщения из bag.
-2. Скорость колес переводится из км/ч в м/с (/ 3.6).
-3. Позиция публикуется в pose.pose.position.x = R.
 """
 
 import rclpy
@@ -24,12 +17,15 @@ from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
 from nav_msgs.msg import Odometry
 from tram_vehicle_msgs.msg import VelocitySensor, DriverControllerCommand
 
+# нужно схлопнуть с этой штукой
 from odometry_node import DeadReckoningNode
 
 
-class TramOdometryNode(Node):
+class RecoveryOdometryNode(Node):
     def __init__(self):
-        super().__init__("tram_odometry_node")
+        super().__init__("recovery_odometry_node")
+
+        # непонятное
         
         self.declare_parameter("input_in_kmh", True)
         self.declare_parameter("integration_method", "trapezoidal")
@@ -43,14 +39,12 @@ class TramOdometryNode(Node):
         
         # Ядро одометрии
         self.estimator = DeadReckoningNode(input_in_kmh=input_in_kmh, integration_method=method)
-        
-        # Издатели
-        # Регламент: QoS reliable или sensor_data (best-effort)
+
+        # перепроверить что нужно публиковать
         qos_pub = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_vel = self.create_publisher(VelocitySensor, "/result/velocity", qos_pub)
         self.pub_pos = self.create_publisher(Odometry, "/result/position", qos_pub)
         
-        # Подписчики (qos_profile_sensor_data для совместимости с rosbag play)
         self.sub_front = self.create_subscription(
             VelocitySensor,
             "/vehicle/front_bogie_velocity",
@@ -71,7 +65,7 @@ class TramOdometryNode(Node):
         )
         
         self.msg_count = 0
-        self.get_logger().info("TramOdometryNode инициализирована и готова к приему данных.")
+        self.get_logger().info("Recovery Odometry Node started")
 
     def cb_front_velocity(self, msg: VelocitySensor):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
@@ -85,10 +79,12 @@ class TramOdometryNode(Node):
         if state:
             self.publish_results(msg.header.stamp, state)
 
+    # нет прямого использования :(
     def cb_driver_cmd(self, msg: DriverControllerCommand):
         # Позиция ручки водителя может использоваться для дополнительной фильтрации
         pass
 
+    # перепроверить
     def publish_results(self, stamp, state):
         # 1. Публикация /result/velocity
         vel_msg = VelocitySensor()
@@ -120,17 +116,20 @@ class TramOdometryNode(Node):
                 f"V_ср={state.v_avg * 3.6:.1f} км/ч ({state.v_avg:.2f} м/с) | R={state.distance:.2f} м"
             )
 
+    # добавить обработку через модель
 
 def main(args=None):
     rclpy.init(args=args)
-    node = TramOdometryNode()
+    node = RecoveryOdometryNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

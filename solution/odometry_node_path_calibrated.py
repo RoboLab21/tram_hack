@@ -156,7 +156,11 @@ class PathCalibratedDeadReckoningNode:
         v_max_kmh: float = 75.0,
         zero_thresh_kmh: float = 1.0,
         window_size: int = 15,
-        # Параметры фильтра торможения:
+        # Параметры сглаживания скорости:
+        velocity_filter: str = "mean",          # "mean" (мгновенная), "sma" (Simple MA), "ema" (Exponential MA)
+        window_size_speed: int = 5,             # Количество точек N для сглаживания скорости
+        alpha_speed: Optional[float] = None,    # Коэффициент EMA (по умолчанию 2 / (N + 1))
+        # Параметры тормозного фильтра:
         enable_brake_filter: bool = True,
         brake_crawl_thresh_kmh: float = 0.8,    # Порог отсечения ползучего хода при торможении (м/с -> 0.22)
         brake_decel_limit_ms2: float = 2.5,     # Физический предел замедления сталь-рельс при торможении
@@ -181,6 +185,14 @@ class PathCalibratedDeadReckoningNode:
         self.enable_brake_filter = enable_brake_filter
         self.brake_crawl_thresh_ms = brake_crawl_thresh_kmh / 3.6
         self.brake_decel_limit_ms2 = brake_decel_limit_ms2
+
+        # Параметры сглаживания скорости (MEAN / SMA / EMA)
+        self.velocity_filter = velocity_filter.lower()
+        self.window_size_speed = max(1, int(window_size_speed))
+        if alpha_speed is not None:
+            self.alpha_speed = float(alpha_speed)
+        else:
+            self.alpha_speed = 2.0 / (self.window_size_speed + 1.0)
 
         # Параметры компенсации поворотов
         self.enable_curve_compensation = enable_curve_compensation
@@ -244,6 +256,10 @@ class PathCalibratedDeadReckoningNode:
         self.active_straight_id: int = 0
         self.section_entry_r: Dict[int, float] = {}
         self.section_measurements: Dict[int, Dict[str, float]] = {}
+
+        # Состояние сглаживания скорости (SMA / EMA)
+        self.sma_speed_buffer: deque = deque(maxlen=self.window_size_speed)
+        self.v_ema_speed: Optional[float] = None
 
         self.history_v1 = deque(maxlen=self.window_size)
         self.history_v2 = deque(maxlen=self.window_size)
@@ -454,6 +470,17 @@ class PathCalibratedDeadReckoningNode:
                 a_meas = (v_filt - self.last_v_est) / dt
                 if a_meas < -self.brake_decel_limit_ms2:
                     v_filt = max(0.0, self.last_v_est - self.brake_decel_limit_ms2 * dt)
+
+        # Сглаживание скорости (SMA / EMA)
+        if self.velocity_filter == "sma":
+            self.sma_speed_buffer.append(v_filt)
+            v_filt = float(np.mean(self.sma_speed_buffer))
+        elif self.velocity_filter == "ema":
+            if self.v_ema_speed is None:
+                self.v_ema_speed = v_filt
+            else:
+                self.v_ema_speed = self.alpha_speed * v_filt + (1.0 - self.alpha_speed) * self.v_ema_speed
+            v_filt = self.v_ema_speed
 
         # Масштабирование скорости на коэффициент общего износа бандажей:
         v_est = self.k_scale * v_filt
