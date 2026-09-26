@@ -35,3 +35,10 @@ Thumbs.db
 # Env files (secrets — keep these out!)
 .env
 .env.*
+
+
+# Data
+data.zip
+data/
+data_gnss_errors/
+data_no_gnss/
