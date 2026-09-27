@@ -7,7 +7,6 @@ from .odometry_node_path_calibrated import (
     CalibratedOdometryState,
     StraightSection,
     load_path_geometry,
-    extract_straight_sections,
 )
 
 __all__ = [
@@ -15,7 +14,6 @@ __all__ = [
     "CalibratedOdometryState",
     "StraightSection",
     "load_path_geometry",
-    "extract_straight_sections",
 ]
 
 try:

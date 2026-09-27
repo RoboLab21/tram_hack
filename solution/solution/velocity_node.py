@@ -28,44 +28,15 @@ class VelocityNode(Node):
     def __init__(self):
         super().__init__("velocity_node")
 
-        # ---------------------------------------------------------------------
-        # Параметры ноды
-        # ---------------------------------------------------------------------
-        self.declare_parameter("input_in_kmh", True)
-        self.declare_parameter("integration_method", "trapezoidal")
-        self.declare_parameter("velocity_filter", "mean")
-        self.declare_parameter("enable_brake_filter", True)
-        self.declare_parameter("enable_curve_compensation", True)
         self.declare_parameter("child_frame_id", "base_link")
-
-        input_in_kmh = self.get_parameter("input_in_kmh").get_parameter_value().bool_value
-        integration_method = self.get_parameter("integration_method").get_parameter_value().string_value
-        velocity_filter = self.get_parameter("velocity_filter").get_parameter_value().string_value
-        enable_brake_filter = self.get_parameter("enable_brake_filter").get_parameter_value().bool_value
-        enable_curve_comp = self.get_parameter("enable_curve_compensation").get_parameter_value().bool_value
         self.child_frame_id = self.get_parameter("child_frame_id").get_parameter_value().string_value
 
-        # ---------------------------------------------------------------------
-        # Алгоритмическое ядро оценки скорости и фильтрации сбоев
-        # ---------------------------------------------------------------------
-        self.estimator = PathCalibratedDeadReckoningNode(
-            input_in_kmh=input_in_kmh,
-            integration_method=integration_method,
-            velocity_filter=velocity_filter,
-            enable_brake_filter=enable_brake_filter,
-            enable_curve_compensation=enable_curve_comp,
-            record_history=False
-        )
+        self.estimator = PathCalibratedDeadReckoningNode()
 
-        # ---------------------------------------------------------------------
-        # Издатель /result/velocity
-        # ---------------------------------------------------------------------
+
         qos_pub = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_vel = self.create_publisher(VelocitySensor, "/result/velocity", qos_pub)
 
-        # ---------------------------------------------------------------------
-        # Подписчики входной телеметрии
-        # ---------------------------------------------------------------------
         self.sub_front = self.create_subscription(
             VelocitySensor,
             "/vehicle/front_bogie_velocity",
