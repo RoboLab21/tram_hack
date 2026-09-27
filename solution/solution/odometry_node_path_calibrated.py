@@ -26,41 +26,43 @@ import numpy as np
 
 @dataclass
 class StraightSection:
-    idx: int            # Номер контрольного прямого участка (1, 2, 3...)
-    s_start: float      # Начальная путевая координата на карте (м)
-    s_end: float        # Конечная путевая координата на карте (м)
-    length: float       # Эталонная длина участка по карте (м)
+    idx: int  # Номер контрольного прямого участка (1, 2, 3...)
+    s_start: float  # Начальная путевая координата на карте (м)
+    s_end: float  # Конечная путевая координата на карте (м)
+    length: float  # Эталонная длина участка по карте (м)
 
 
 @dataclass
 class CalibratedOdometryState:
-    timestamp: float        # Текущая метка времени (сек)
-    v1_raw: float           # Исходная скорость передней тележки (м/с)
-    v2_raw: float           # Исходная скорость задней тележки (м/с)
-    v1_valid: bool          # Флаг исправности датчика 1
-    v2_valid: bool          # Флаг исправности датчика 2
-    v_est: float            # Оцененная продольная скорость с учетом износа и фильтрации (м/с)
-    acceleration: float     # Оцененное продольное ускорение (м/с²)
-    diff_sq: float          # Квадратичное отклонение между датчиками (v1 - v2)^2
-    fault_type: str         # "OK", "ZERO_V1", "ZERO_V2", "SPIKE_V1", "SPIKE_V2", "EXCESSIVE_DIFF"
-    delta_t: float          # Шаг времени (сек)
-    delta_r: float          # Приращение скорректированного пути (м)
-    distance: float         # Накопленный путь R (м)
-    in_straight: bool       # Флаг нахождения на калибровочном участке
-    straight_id: int        # Номер активного участка карты (0 - вне калибровки)
-    k_scale: float          # Масштабный коэффициент износа колес (V_true / V_колес)
-    wear_pct: float         # Оценочный износ бандажей в процентах: (k_scale - 1) * 100%
-    driver_cmd: int         # Актуальное положение ручки контроллера водителя (-15 .. +15)
-    is_braking: bool        # Флаг активного торможения (строго driver_cmd < 0)
-    path_curvature: float   # Локальная кривизна пути |kappa| по карте (1/м)
-    curve_factor: float     # Коэффициент компенсации кривизны (c_curve <= 1.0)
+    timestamp: float  # Текущая метка времени (сек)
+    v1_raw: float  # Исходная скорость передней тележки (м/с)
+    v2_raw: float  # Исходная скорость задней тележки (м/с)
+    v1_valid: bool  # Флаг исправности датчика 1
+    v2_valid: bool  # Флаг исправности датчика 2
+    v_est: float  # Оцененная продольная скорость с учетом износа и фильтрации (м/с)
+    acceleration: float  # Оцененное продольное ускорение (м/с²)
+    diff_sq: float  # Квадратичное отклонение между датчиками (v1 - v2)^2
+    fault_type: (
+        str  # "OK", "ZERO_V1", "ZERO_V2", "SPIKE_V1", "SPIKE_V2", "EXCESSIVE_DIFF"
+    )
+    delta_t: float  # Шаг времени (сек)
+    delta_r: float  # Приращение скорректированного пути (м)
+    distance: float  # Накопленный путь R (м)
+    in_straight: bool  # Флаг нахождения на калибровочном участке
+    straight_id: int  # Номер активного участка карты (0 - вне калибровки)
+    k_scale: float  # Масштабный коэффициент износа колес (V_true / V_колес)
+    wear_pct: float  # Оценочный износ бандажей в процентах: (k_scale - 1) * 100%
+    driver_cmd: int  # Актуальное положение ручки контроллера водителя (-15 .. +15)
+    is_braking: bool  # Флаг активного торможения (строго driver_cmd < 0)
+    path_curvature: float  # Локальная кривизна пути |kappa| по карте (1/м)
+    curve_factor: float  # Коэффициент компенсации кривизны (c_curve <= 1.0)
 
 
 def load_path_geometry(
     path_file: str | Path,
-    max_curvature: float = 0.005,      # Радиус кривизны > 200 м
-    min_length_m: float = 70.0,         # Минимальная длина прямого отрезка для калибровки (м)
-    top_n: Optional[int] = None         # None = все прямые участки на всем пути маршрута
+    max_curvature: float = 0.005,  # Радиус кривизны > 200 м
+    min_length_m: float = 70.0,  # Минимальная длина прямого отрезка для калибровки (м)
+    top_n: Optional[int] = None,  # None = все прямые участки на всем пути маршрута
 ) -> Tuple[List[StraightSection], np.ndarray, np.ndarray]:
     """
     Загружает геометрию цифрового пути из pathgraph:
@@ -82,11 +84,26 @@ def load_path_geometry(
     zs = np.array([pt.get("z", 0.0) for pt in pts], dtype=np.float64)
     curvs = np.array([abs(float(pt.get("curv", 0.0))) for pt in pts], dtype=np.float64)
 
-    strait_map = np.insert(np.cumsum(np.sqrt(np.diff(xs) ** 2 + np.diff(ys) ** 2 + np.diff(zs) ** 2)), 0, 0.0)
+    strait_map = np.insert(
+        np.cumsum(np.sqrt(np.diff(xs) ** 2 + np.diff(ys) ** 2 + np.diff(zs) ** 2)),
+        0,
+        0.0,
+    )
 
-    # Поиск прямых участков
-    is_straight = curvs < max_curvature
-    sections: List[StraightSection] = []
+    sections = find_straight_segments(
+        curvs < max_curvature, strait_map, min_length_m, top_n
+    )
+
+    return sections, strait_map, curvs
+
+
+def find_straight_segments(
+    is_straight: list[bool],
+    strait_map: np.ndarray,
+    min_length_m: float,
+    top_n: int | None,
+) -> list[StraightSection]:
+    sections: list[StraightSection] = []
     in_seg = False
     start_idx = 0
 
@@ -100,7 +117,12 @@ def load_path_geometry(
             if length >= min_length_m:
                 idx = len(sections) + 1
                 sections.append(
-                    StraightSection(idx, float(strait_map[start_idx]), float(strait_map[i - 1]), length)
+                    StraightSection(
+                        idx,
+                        float(strait_map[start_idx]),
+                        float(strait_map[i - 1]),
+                        length,
+                    )
                 )
                 if top_n is not None and len(sections) >= top_n:
                     break
@@ -110,10 +132,11 @@ def load_path_geometry(
         if length >= min_length_m:
             idx = len(sections) + 1
             sections.append(
-                StraightSection(idx, float(strait_map[start_idx]), float(strait_map[-1]), length)
+                StraightSection(
+                    idx, float(strait_map[start_idx]), float(strait_map[-1]), length
+                )
             )
-
-    return sections, strait_map, curvs
+    return sections
 
 
 class PathCalibratedDeadReckoningNode:
@@ -138,31 +161,35 @@ class PathCalibratedDeadReckoningNode:
         v_max_kmh: float = 75.0,
         zero_thresh_kmh: float = 1.0,
         window_size: int = 15,
-        window_size_speed: int = 5, 
+        window_size_speed: int = 5,
         alpha_speed: Optional[float] = None,
         # Параметры тормозного фильтра:
-        brake_crawl_thresh_kmh: float = 0.8,    # Порог отсечения ползучего хода (м/с -> 0.22)
-        brake_decel_limit_ms2: float = 2.5,     # Физический предел замедления при торможении
+        brake_crawl_thresh_kmh: float = 0.8,  # Порог отсечения ползучего хода (м/с -> 0.22)
+        brake_decel_limit_ms2: float = 2.5,  # Физический предел замедления при торможении
         # Параметры компенсации кривизны поворотов:
-        curve_thresh_curv: float = 0.008,       # Порог кривизны для поворотов (R <= 125 м)
-        curve_beta: float = 0.20,               # Фактор компенсации забегания колес
+        curve_thresh_curv: float = 0.008,  # Порог кривизны для поворотов (R <= 125 м)
+        curve_beta: float = 0.20,  # Фактор компенсации забегания колес
         curve_min_factor: float = 0.85,
         # Управление памятью:
-        record_history: bool = False            # True только для оффлайн анализа
+        record_history: bool = False,  # True только для оффлайн анализа
     ):
-        self.scale_factor = (1.0 / 3.6) # вход все-таки в км/ч
+        self.scale_factor = 1.0 / 3.6  # вход все-таки в км/ч
         self.k_scale_init = float(k_scale_init)
 
         # Пороговые значения фильтра сбоев тележек
         self.diff_sq_thresh = (diff_thresh_kmh / 3.6) ** 2
-        self.a_max_sq = a_max_ms2 ** 2
+        self.a_max_sq = a_max_ms2**2
         self.v_max_ms = v_max_kmh / 3.6
         self.zero_thresh_ms = zero_thresh_kmh / 3.6
         self.window_size = window_size
 
         # Параметры сглаживания скорости
         self.window_size_speed = max(1, window_size_speed)
-        self.alpha_speed = alpha_speed if alpha_speed is not None else (2.0 / (self.window_size_speed + 1.0))
+        self.alpha_speed = (
+            alpha_speed
+            if alpha_speed is not None
+            else (2.0 / (self.window_size_speed + 1.0))
+        )
 
         # Тормозной контур
         self.brake_crawl_thresh_ms = brake_crawl_thresh_kmh / 3.6
@@ -199,8 +226,8 @@ class PathCalibratedDeadReckoningNode:
         self.reset()
 
     def reset(self):
-        self.R: float = 0.0                     # Скорректированный пройденный путь (м)
-        self.R_raw: float = 0.0                 # Некалиброванный сырой путь колес (м)
+        self.R: float = 0.0  # Скорректированный пройденный путь (м)
+        self.R_raw: float = 0.0  # Некалиброванный сырой путь колес (м)
         self.last_time: Optional[float] = None
         self.v1: float = 0.0
         self.v2: float = 0.0
@@ -217,7 +244,7 @@ class PathCalibratedDeadReckoningNode:
 
         # Автокалибровка износа колес
         self.k_scale: float = self.k_scale_init
-        self.is_calibrated: bool = (self.k_scale_init != 1.0)
+        self.is_calibrated: bool = self.k_scale_init != 1.0
         self.scale_samples: List[float] = []
         self.active_straight_id: int = 0
         self.section_entry_r: Dict[int, float] = {}
@@ -233,7 +260,9 @@ class PathCalibratedDeadReckoningNode:
         if self.record_history:
             self.history.clear()
 
-    def update_driver_cmd(self, timestamp_or_position: float | int, position: Optional[int] = None):
+    def update_driver_cmd(
+        self, timestamp_or_position: float | int, position: Optional[int] = None
+    ):
         """Обновление положения ручки контроллера водителя (поддерживает 1 или 2 аргумента)."""
         if position is not None:
             cmd = int(position)
@@ -454,16 +483,15 @@ class PathCalibratedDeadReckoningNode:
                     v_filt = max(0.0, self.last_v_est - self.brake_decel_limit_ms2 * dt)
 
         if self.v_ema_speed is not None:
-            self.v_ema_speed = self.alpha_speed * v_filt + (1.0 - self.alpha_speed) * self.v_ema_speed
+            self.v_ema_speed = (
+                self.alpha_speed * v_filt + (1.0 - self.alpha_speed) * self.v_ema_speed
+            )
             v_filt = self.v_ema_speed
 
         v_est = self.k_scale * v_filt
 
         curve_factor = 1.0
-        if (
-            self.s_map is not None
-            and self.curv_map is not None
-        ):
+        if self.s_map is not None and self.curv_map is not None:
             if curv_val > self.curve_thresh_curv:
                 curve_factor = max(
                     self.curve_min_factor,
@@ -518,3 +546,4 @@ class PathCalibratedDeadReckoningNode:
         )
         self._save_state(state)
         return state
+
