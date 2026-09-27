@@ -4,6 +4,7 @@ services:
     image: tram-solution:humble
     container_name: tram-solution
     network_mode: host
+    ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_LOG_DIR=/tmp/ros2_logs
@@ -17,6 +18,7 @@ services:
     image: check-code:humble
     container_name: tram-checker
     network_mode: host
+    ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_LOG_DIR=/tmp/ros2_logs
@@ -26,7 +28,6 @@ services:
     command: >
       bash -c "
         source /opt/ros/humble/setup.bash &&
-        colcon build --packages-select tram_vehicle_msgs hackathon_solution_checker &&
         source install/setup.bash &&
         ros2 run hackathon_solution_checker metrics
       "
@@ -38,6 +39,7 @@ services:
     image: check-code:humble
     container_name: tram-bag-player
     network_mode: host
+    ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_LOG_DIR=/tmp/ros2_logs

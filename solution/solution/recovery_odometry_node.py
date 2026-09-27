@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Основная ROS 2 нода резервной одометрии беспилотного трамвая (RecoveryOdometryNode).
+ROS 2 Нода фильтрованной резервной одометрии беспилотного трамвая (RecoveryOdometryNode).
 
 Входные топики (Subscribe):
     /vehicle/front_bogie_velocity (tram_vehicle_msgs/msg/VelocitySensor) - скорость передней тележки (км/ч)
@@ -9,14 +9,14 @@
 
 Выходные топики (Publish):
     /result/velocity (tram_vehicle_msgs/msg/VelocitySensor) - оцененная продольная скорость (м/с)
-    /result/position (nav_msgs/msg/Odometry)                - оцененное положение (м) вдоль пути / 3D
+    /result/position (nav_msgs/msg/Odometry)                - пройденный путь и 3D позиция (м)
 """
 
 import os
 import sys
 import json
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Dict, Any
 
 import rclpy
 from rclpy.node import Node
