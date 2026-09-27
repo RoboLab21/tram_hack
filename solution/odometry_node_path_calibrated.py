@@ -60,14 +60,14 @@ class CalibratedOdometryState:
 
 def load_path_geometry(
     path_file_or_data: Any,
-    max_curvature: float = 0.0005,  # Радиус кривизны > 2000 м (|curv| < 0.0005 1/м)
-    min_length_m: float = 70.0,     # Минимальная длина прямого отрезка для калибровки (м)
-    top_n: int = 5                  # Количество контрольных прямых участков
+    max_curvature: float = 0.0005,      # Радиус кривизны > 2000 м (|curv| < 0.0005 1/м)
+    min_length_m: float = 70.0,         # Минимальная длина прямого отрезка для калибровки (м)
+    top_n: Optional[int] = None         # None = все прямые участки на всем пути маршрута (Вариант 3)
 ) -> Tuple[List[StraightSection], np.ndarray, np.ndarray]:
     """
     Загружает геометрию цифрового пути из pathgrath:
     Возвращает:
-      - straight_sections: список контрольных прямых участков для автокалибровки износа колес.
+      - straight_sections: список контрольных прямых участков для автокалибровки износа колес на всем пути.
       - s_map: массив кумулятивного расстояния вдоль пути (м).
       - curv_map: массив модуля кривизны пути |kappa| (1/м).
     """
@@ -108,10 +108,10 @@ def load_path_geometry(
             if length >= min_length_m:
                 idx = len(sections) + 1
                 sections.append(StraightSection(idx, float(s_map[start_idx]), float(s_map[i - 1]), length))
-                if len(sections) >= top_n:
+                if top_n is not None and len(sections) >= top_n:
                     break
 
-    if in_seg and len(sections) < top_n:
+    if in_seg and (top_n is None or len(sections) < top_n):
         length = float(s_map[-1] - s_map[start_idx])
         if length >= min_length_m:
             idx = len(sections) + 1
@@ -124,9 +124,9 @@ def extract_straight_sections(
     path_file_or_data: Any,
     max_curvature: float = 0.0005,
     min_length_m: float = 70.0,
-    top_n: int = 5
+    top_n: Optional[int] = None
 ) -> List[StraightSection]:
-    """Обратная совместимость: возвращает только список прямых участков."""
+    """Возвращает список контрольных прямых участков вдоль всего пути (top_n=None по умолчанию)."""
     sections, _, _ = load_path_geometry(path_file_or_data, max_curvature, min_length_m, top_n)
     return sections
 
