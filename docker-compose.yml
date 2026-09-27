@@ -10,7 +10,7 @@ services:
     volumes:
       - ./bags:/opt/bags:ro
       - ./pathgrath:/opt/pathgrath:ro
-    command: ["ros2", "run", "solution", "recovery_odometry_node", "--ros-args", "-p", "path_file:=/opt/pathgrath/щукинская - таллинская.json"]
+    command: ["ros2", "run", "solution", "recovery_odometry_node"]
     restart: unless-stopped
 
   checker:
