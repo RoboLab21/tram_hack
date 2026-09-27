@@ -30,7 +30,7 @@ from nav_msgs.msg import Odometry
 from tram_vehicle_msgs.msg import VelocitySensor, DriverControllerCommand
 
 from dynamic_odometry_node import DynamicOdometryNode
-from tram_dynamic_model import TramParameters
+from tram_dynamic_model import TramParameters, SpeedRegimeParameters
 
 
 class Ros2DynamicOdometryNode(Node):
@@ -38,23 +38,33 @@ class Ros2DynamicOdometryNode(Node):
         super().__init__("dynamic_model_odometry_node")
 
         # 1. Параметры ноды
-        self.declare_parameter("mass_kg", 23000.0)  # Масса вагона по умолчанию 23 т
+        self.declare_parameter("mass_kg", 24500.0)  # Масса вагона по умолчанию 24.5 т
         self.declare_parameter("path_file", "")
         self.declare_parameter("frame_id", "odom")
         self.declare_parameter("child_frame_id", "base_link")
+        self.declare_parameter("max_city_speed_kmh", 60.0)
+        self.declare_parameter("loop_speed_kmh", 15.0)
         
         mass_kg = self.get_parameter("mass_kg").get_parameter_value().double_value
         path_file = self.get_parameter("path_file").get_parameter_value().string_value
         self.frame_id = self.get_parameter("frame_id").get_parameter_value().string_value
         self.child_frame_id = self.get_parameter("child_frame_id").get_parameter_value().string_value
+        max_city_spd = self.get_parameter("max_city_speed_kmh").get_parameter_value().double_value
+        loop_spd = self.get_parameter("loop_speed_kmh").get_parameter_value().double_value
 
-        # 2. Инициализация физико-математической модели
+        # 2. Инициализация физико-математической модели со скоростными режимами
         params = TramParameters(mass_kg=mass_kg)
+        speed_params = SpeedRegimeParameters(
+            enable_speed_regimes=True,
+            max_city_speed_kmh=max_city_spd,
+            loop_speed_kmh=loop_spd
+        )
         path_arg = Path(path_file) if path_file and Path(path_file).exists() else None
         
         self.estimator = DynamicOdometryNode(
             path_geometry_file_or_data=path_arg,
-            tram_params=params
+            tram_params=params,
+            speed_params=speed_params
         )
 
         # 3. Публикаторы результатов
