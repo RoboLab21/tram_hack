@@ -19,4 +19,5 @@ position_node:
   ros__parameters:
     frame_id: "map"                     # Имя глобальной системы координат (map)
     child_frame_id: "base_link"         # Базовый фрейм транспортного средства
+    enable_gnss_drift_correction: false # Коррекция продольного дрейфа по GNSS в процессе движения (false = отключено)
 

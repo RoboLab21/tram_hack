@@ -24,13 +24,19 @@ import math
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
-
-from nav_msgs.msg import Odometry
-from sensor_msgs.msg import NavSatFix
-from tram_vehicle_msgs.msg import VelocitySensor
+try:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
+    from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import NavSatFix
+    from tram_vehicle_msgs.msg import VelocitySensor
+    HAS_RCLPY = True
+except ImportError:
+    HAS_RCLPY = False
+    Node = object
+    qos_profile_sensor_data = QoSProfile = ReliabilityPolicy = None
+    Odometry = NavSatFix = VelocitySensor = None
 
 try:
     from ament_index_python.packages import get_package_share_directory
@@ -107,6 +113,27 @@ class PositionNode(Node):
         self.gnss_initialized: bool = False
         self.last_master_fix: Optional[Tuple[float, float, float, float]] = None
         self.last_rover_fix: Optional[Tuple[float, float, float, float]] = None
+
+        # ---------------------------------------------------------------------
+        # Параметры выравнивания дрейфа по GNSS
+        # ---------------------------------------------------------------------
+        self.declare_parameter("enable_gnss_drift_correction", True)
+        self.declare_parameter("gnss_corr_max_lateral_dev_m", 3.5)
+        self.declare_parameter("gnss_corr_max_longitudinal_dev_m", 25.0)
+        self.declare_parameter("gnss_corr_gain", 0.15)
+        self.declare_parameter("gnss_corr_gain_stopped", 0.50)
+        self.declare_parameter("gnss_min_interval_sec", 0.5)
+
+        self.enable_gnss_drift_correction = self.get_parameter("enable_gnss_drift_correction").get_parameter_value().bool_value
+        self.gnss_corr_max_lateral_dev_m = self.get_parameter("gnss_corr_max_lateral_dev_m").get_parameter_value().double_value
+        self.gnss_corr_max_longitudinal_dev_m = self.get_parameter("gnss_corr_max_longitudinal_dev_m").get_parameter_value().double_value
+        self.gnss_corr_gain = self.get_parameter("gnss_corr_gain").get_parameter_value().double_value
+        self.gnss_corr_gain_stopped = self.get_parameter("gnss_corr_gain_stopped").get_parameter_value().double_value
+        self.gnss_min_interval_sec = self.get_parameter("gnss_min_interval_sec").get_parameter_value().double_value
+
+        self.last_gnss_corr_time: Optional[float] = None
+        self.gnss_corr_count: int = 0
+        self.gnss_total_correction_m: float = 0.0
 
         # ---------------------------------------------------------------------
         # Издатель /result/position
@@ -192,42 +219,55 @@ class PositionNode(Node):
             return
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         self.last_master_fix = (t, msg.latitude, msg.longitude, msg.altitude)
-        self._try_auto_select_route_and_init()
+
+        if not self.gnss_initialized:
+            self._try_auto_select_route_and_init()
+        elif self.enable_gnss_drift_correction:
+            self._correct_position_drift_from_gnss(t, msg.latitude, msg.longitude, msg.altitude)
 
     def cb_gnss_rover(self, msg: NavSatFix):
         if not math.isfinite(msg.latitude) or not math.isfinite(msg.longitude):
             return
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         self.last_rover_fix = (t, msg.latitude, msg.longitude, msg.altitude)
-        self._try_auto_select_route_and_init()
+
+        if not self.gnss_initialized:
+            self._try_auto_select_route_and_init()
 
     def _try_auto_select_route_and_init(self):
         """Автоматический выбор карты пути и привязка начальной путевой координаты."""
-        if self.gnss_initialized or self.last_master_fix is None or self.last_rover_fix is None:
+        if self.gnss_initialized or self.last_master_fix is None:
             return
 
         tm, lat_m, lon_m, alt_m = self.last_master_fix
-        tr, lat_r, lon_r, _ = self.last_rover_fix
-
-        if abs(tm - tr) > 1.0:
-            return
+        has_valid_rover = False
+        ux, uy = 1.0, 0.0
 
         try:
             xm, ym = wgs84_to_map(lat_m, lon_m)
-            xr, yr = wgs84_to_map(lat_r, lon_r)
-            dx = xr - xm
-            dy = yr - ym
-            dist = math.hypot(dx, dy)
-            if dist < 2.0:
-                return
 
-            ux = dx / dist
-            uy = dy / dist
+            if self.last_rover_fix is not None:
+                tr, lat_r, lon_r, _ = self.last_rover_fix
+                if abs(tm - tr) <= 2.0:
+                    xr, yr = wgs84_to_map(lat_r, lon_r)
+                    dx = xr - xm
+                    dy = yr - ym
+                    dist = math.hypot(dx, dy)
+                    if dist >= 2.0:
+                        ux = dx / dist
+                        uy = dy / dist
+                        has_valid_rover = True
 
-            # Вычисление координаты base_link по tf антенн (master в -9.873 м)
-            x_base = xm + 9.873 * ux
-            y_base = ym + 9.873 * uy
-            z_base = alt_m - 3.0
+            # Если rover доступен, рассчитываем точный base_link по вектору антенн
+            if has_valid_rover:
+                x_base = xm + 9.873 * ux
+                y_base = ym + 9.873 * uy
+            else:
+                # При отсутствии rover ориентируемся по координатам master антенны
+                x_base = xm
+                y_base = ym
+
+            z_base = alt_m - 3.0 if math.isfinite(alt_m) else 0.0
 
             # -----------------------------------------------------------------
             # Автоматический выбор наилучшей карты из загруженных маршрутов
@@ -247,6 +287,16 @@ class PositionNode(Node):
                     best_s0 = float(route.s_map[min_idx])
 
             if best_route is not None:
+                # Если rover не было, уточняем проекцию base_link по касательной рельса
+                if not has_valid_rover:
+                    tang_val = float(np.interp(best_s0, best_route.s_map, best_route.pts_tang))
+                    x_base = xm + 9.873 * math.cos(tang_val)
+                    y_base = ym + 9.873 * math.sin(tang_val)
+                    dists_sq = (best_route.pts_x - x_base) ** 2 + (best_route.pts_y - y_base) ** 2
+                    min_idx = int(np.argmin(dists_sq))
+                    best_s0 = float(best_route.s_map[min_idx])
+                    best_dev_sq = dists_sq[min_idx]
+
                 self.active_route = best_route
                 self.s_0 = best_s0
                 dev_m = math.sqrt(best_dev_sq)
@@ -255,10 +305,95 @@ class PositionNode(Node):
                 self.get_logger().info(
                     f"✓ [АВТОВЫБОР ПАФГРАФА]: Маршрут автоматически определен: '{best_route.name}'. "
                     f"Начальная позиция base_link: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}), "
-                    f"s0 = {self.s_0:.1f} м (отклонение от рельс: {dev_m:.2f} м)"
+                    f"s0 = {self.s_0:.1f} м (отклонение от рельс: {dev_m:.2f} м, rover={'ДА' if has_valid_rover else 'НЕТ'})"
                 )
         except Exception as e:
             self.get_logger().warn(f"Ошибка при автовыборе карты: {e}")
+
+    def _correct_position_drift_from_gnss(self, tm: float, lat_m: float, lon_m: float, alt_m: float):
+        """
+        Выравнивание накопленного продольного дрейфа позиции по спутниковым данным.
+        Вызывается при наличии промежуточных сообщений GNSS на маршруте.
+        """
+        if self.active_route is None:
+            return
+
+        # Ограничение частоты коррекции
+        if self.last_gnss_corr_time is not None and (tm - self.last_gnss_corr_time) < self.gnss_min_interval_sec:
+            return
+
+        rg = self.active_route
+        s_cur = self.s_0 + self.accumulated_distance
+        if s_cur < 5.0 or s_cur > (rg.total_length - 5.0):
+            return
+
+        try:
+            xm, ym = wgs84_to_map(lat_m, lon_m)
+
+            # Вычисление координат base_link:
+            used_rover = False
+            if self.last_rover_fix is not None:
+                tr, lat_r, lon_r, _ = self.last_rover_fix
+                if abs(tm - tr) <= 1.0:
+                    xr, yr = wgs84_to_map(lat_r, lon_r)
+                    dx = xr - xm
+                    dy = yr - ym
+                    dist = math.hypot(dx, dy)
+                    if dist >= 2.0:
+                        ux = dx / dist
+                        uy = dy / dist
+                        x_base = xm + 9.873 * ux
+                        y_base = ym + 9.873 * uy
+                        used_rover = True
+
+            if not used_rover:
+                tang_val = float(np.interp(s_cur, rg.s_map, rg.pts_tang))
+                x_base = xm + 9.873 * math.cos(tang_val)
+                y_base = ym + 9.873 * math.sin(tang_val)
+
+            # Локальный поиск ближайшей точки пути в окне вокруг текущей координаты s_cur
+            idx_cur = int(np.searchsorted(rg.s_map, s_cur))
+            w_pts = 60  # ~60 метров вдоль пути
+            i_lo = max(0, idx_cur - w_pts)
+            i_hi = min(len(rg.s_map), idx_cur + w_pts)
+            if i_hi <= i_lo:
+                return
+
+            sub_x = rg.pts_x[i_lo:i_hi]
+            sub_y = rg.pts_y[i_lo:i_hi]
+            dists_sq = (sub_x - x_base) ** 2 + (sub_y - y_base) ** 2
+            min_k = int(np.argmin(dists_sq))
+            lat_dev = math.sqrt(dists_sq[min_k])
+
+            # 1. Отсечение выбросов по боковому расстоянию до рельсов
+            if lat_dev > self.gnss_corr_max_lateral_dev_m:
+                return
+
+            s_gnss = float(rg.s_map[i_lo + min_k])
+            ds = s_gnss - s_cur
+
+            # 2. Отсечение нереалистичных продольных скачков
+            if abs(ds) > self.gnss_corr_max_longitudinal_dev_m:
+                return
+
+            # 3. Мягкая коррекция: на остановках сходимся быстрее, в движении — плавно (без рывков)
+            gain = self.gnss_corr_gain_stopped if abs(self.last_v_est) < 0.1 else self.gnss_corr_gain
+            corr = gain * ds
+
+            self.s_0 += corr
+            self.last_gnss_corr_time = tm
+            self.gnss_corr_count += 1
+            self.gnss_total_correction_m += corr
+
+            if self.gnss_corr_count % 10 == 1:
+                self.get_logger().info(
+                    f"[GNSS Drift Alignment] Невязка Δs={ds:+.2f}м | Правка={corr:+.2f}м | "
+                    f"s={self.s_0 + self.accumulated_distance:.1f}м | Откл. от рельс={lat_dev:.2f}м "
+                    f"(всего правок: {self.gnss_corr_count})"
+                )
+        except Exception as e:
+            self.get_logger().warn(f"Ошибка выравнивания дрейфа по GNSS: {e}")
+
 
     def cb_velocity(self, msg: VelocitySensor):
         """Основной обработчик оцененной скорости из /result/velocity."""

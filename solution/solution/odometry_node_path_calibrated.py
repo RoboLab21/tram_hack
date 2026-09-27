@@ -170,10 +170,17 @@ class PathCalibratedDeadReckoningNode:
         curve_thresh_curv: float = 0.008,  # Порог кривизны для поворотов (R <= 125 м)
         curve_beta: float = 0.20,  # Фактор компенсации забегания колес
         curve_min_factor: float = 0.85,
+        # Параметры режимов работы:
+        input_in_kmh: bool = True,
+        enable_brake_filter: bool = True,
+        enable_curve_compensation: bool = True,
         # Управление памятью:
         record_history: bool = False,  # True только для оффлайн анализа
     ):
-        self.scale_factor = 1.0 / 3.6  # вход все-таки в км/ч
+        self.input_in_kmh = bool(input_in_kmh)
+        self.scale_factor = (1.0 / 3.6) if self.input_in_kmh else 1.0
+        self.enable_brake_filter = bool(enable_brake_filter)
+        self.enable_curve_compensation = bool(enable_curve_compensation)
         self.k_scale_init = float(k_scale_init)
 
         # Пороговые значения фильтра сбоев тележек
@@ -203,6 +210,7 @@ class PathCalibratedDeadReckoningNode:
         # Управление памятью (защита от утечки ОЗУ)
         self.record_history = record_history
         self.recent_states: deque = deque(maxlen=100)
+        self.history_states: List[CalibratedOdometryState] = []
 
         # Загрузка карты пути (прямые участки и профиль кривизны)
         self.straight_sections: List[StraightSection] = []
@@ -356,7 +364,11 @@ class PathCalibratedDeadReckoningNode:
             return state
 
         dt = timestamp - self.last_time
-        if dt <= 0.0:
+        if dt < -1.0:
+            self.reset()
+            self.last_time = timestamp
+            dt = 0.0
+        elif dt <= 0.0:
             dt = 0.0
         elif dt > 2.0:
             dt = 0.0
@@ -527,7 +539,7 @@ class PathCalibratedDeadReckoningNode:
         v_est = self.k_scale * v_filt
 
         curve_factor = 1.0
-        if self.s_map is not None and self.curv_map is not None:
+        if self.enable_curve_compensation and self.s_map is not None and self.curv_map is not None:
             if curv_val > self.curve_thresh_curv:
                 curve_factor = max(
                     self.curve_min_factor,
@@ -584,4 +596,18 @@ class PathCalibratedDeadReckoningNode:
         )
         self._save_state(state)
         return state
+
+    def _save_state(self, state: CalibratedOdometryState):
+        self.recent_states.append(state)
+        if self.record_history:
+            self.history_states.append(state)
+
+    def get_calibration_report(self) -> Dict[str, Any]:
+        return {
+            "k_scale": self.k_scale,
+            "wear_pct": (self.k_scale - 1.0) * 100.0,
+            "is_calibrated": self.is_calibrated,
+            "scale_samples_count": len(self.scale_samples),
+            "total_distance_m": self.R,
+        }
 
