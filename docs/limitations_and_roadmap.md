@@ -1,5 +1,8 @@
 # Описание ограничений решения и плана развития
 
-Добавляем мат модель:
+## Boundaries
+This math model can be used by other paths but with given path_graph. 
+Requires two wheel pairs. Cannot be used by multi carriage trams. 
+Cannout be used correct without path_graph
 
-Можно сказать что макс точно, все что нужно на трамвае - два тахометра и записанный путь (path).
+## Roadmap
