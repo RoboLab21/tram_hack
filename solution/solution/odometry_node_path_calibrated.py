@@ -283,7 +283,6 @@ class PathCalibratedDeadReckoningNode:
         self.history_v1 = deque(maxlen=self.window_size)
         self.history_v2 = deque(maxlen=self.window_size)
         self.history_vest = deque(maxlen=self.window_size)
-        self.history: list[CalibratedOdometryState] = []
 
     def update_driver_cmd(self, position: int):
         """
@@ -586,7 +585,6 @@ class PathCalibratedDeadReckoningNode:
             path_curvature=curv_val,
             curve_factor=curve_factor,
         )
-        self.history.append(state)
         return state
 
     def get_calibration_report(self) -> dict[str, Any]:
@@ -600,27 +598,4 @@ class PathCalibratedDeadReckoningNode:
             "measured_sections": self.section_measurements,
             "enable_brake_filter": self.enable_brake_filter,
             "enable_curve_compensation": self.enable_curve_compensation,
-        }
-
-    def get_arrays(self) -> dict[str, np.ndarray]:
-        if not self.history:
-            return {}
-        return {
-            "timestamp": np.array([s.timestamp for s in self.history]),
-            "v1_raw": np.array([s.v1_raw for s in self.history]),
-            "v2_raw": np.array([s.v2_raw for s in self.history]),
-            "v1_valid": np.array([s.v1_valid for s in self.history]),
-            "v2_valid": np.array([s.v2_valid for s in self.history]),
-            "v_est": np.array([s.v_est for s in self.history]),
-            "diff_sq": np.array([s.diff_sq for s in self.history]),
-            "delta_t": np.array([s.delta_t for s in self.history]),
-            "distance": np.array([s.distance for s in self.history]),
-            "in_straight": np.array([s.in_straight for s in self.history]),
-            "straight_id": np.array([s.straight_id for s in self.history]),
-            "k_scale": np.array([s.k_scale for s in self.history]),
-            "wear_pct": np.array([s.wear_pct for s in self.history]),
-            "driver_cmd": np.array([s.driver_cmd for s in self.history]),
-            "is_braking": np.array([s.is_braking for s in self.history]),
-            "path_curvature": np.array([s.path_curvature for s in self.history]),
-            "curve_factor": np.array([s.curve_factor for s in self.history]),
         }
