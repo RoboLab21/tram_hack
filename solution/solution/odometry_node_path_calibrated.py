@@ -60,7 +60,7 @@ class CalibratedOdometryState:
 
 def load_path_geometry(
     path_file: str | Path,
-    max_curvature: float = 0.005,  # Радиус кривизны > 200 м
+    max_curvature: float = 0.0001,  # Радиус кривизны > 2000 м
     min_length_m: float = 70.0,  # Минимальная длина прямого отрезка для калибровки (м)
     top_n: Optional[int] = None,  # None = все прямые участки на всем пути маршрута
 ) -> Tuple[List[StraightSection], np.ndarray, np.ndarray]:
