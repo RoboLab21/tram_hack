@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Основная ROS 2 нода резервной одометрии беспилотного трамвая (RecoveryOdometryNode).
 
@@ -19,11 +18,10 @@
 4. Геометрическая компенсация кривизны коротких / крутых поворотов (R <= 125 м) по цифровой карте pathgrath.
 """
 
-import os
 import sys
 import json
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import list
 
 import rclpy
 from rclpy.node import Node
@@ -43,13 +41,13 @@ try:
     from solution.odometry_node_path_calibrated import (
         PathCalibratedDeadReckoningNode,
         load_path_geometry,
-        StraightSection
+        StraightSection,
     )
 except ImportError:
     from odometry_node_path_calibrated import (
         PathCalibratedDeadReckoningNode,
         load_path_geometry,
-        StraightSection
+        StraightSection,
     )
 
 import numpy as np
@@ -62,45 +60,70 @@ class RecoveryOdometryNode(Node):
         # ---------------------------------------------------------------------
         # Параметры ноды
         # ---------------------------------------------------------------------
-        self.declare_parameter("route", "щук-талл")                 # "щук-талл" или "талл-щук"
-        self.declare_parameter("path_file", "")                     # Явный путь к файлу pathgrath JSON
-        self.declare_parameter("input_in_kmh", True)                # Входные датчики тележек в км/ч
-        self.declare_parameter("integration_method", "trapezoidal") # "trapezoidal" или "rectangular"
-        self.declare_parameter("velocity_filter", "mean")           # "mean", "ema", "sma"
+        self.declare_parameter("route", "щук-талл")  # "щук-талл" или "талл-щук"
+        self.declare_parameter("path_file", "")  # Явный путь к файлу pathgrath JSON
+        self.declare_parameter("input_in_kmh", True)  # Входные датчики тележек в км/ч
+        self.declare_parameter(
+            "integration_method", "trapezoidal"
+        )  # "trapezoidal" или "rectangular"
+        self.declare_parameter("velocity_filter", "mean")  # "mean", "ema", "sma"
         self.declare_parameter("frame_id", "odom")
         self.declare_parameter("child_frame_id", "base_link")
-        self.declare_parameter("publish_3d_pose", False)            # True = x,y,z по карте; False = x=R вдоль пути
+        self.declare_parameter(
+            "publish_3d_pose", False
+        )  # True = x,y,z по карте; False = x=R вдоль пути
         self.declare_parameter("enable_brake_filter", True)
         self.declare_parameter("enable_curve_compensation", True)
 
         self.route = self.get_parameter("route").get_parameter_value().string_value
-        path_file_param = self.get_parameter("path_file").get_parameter_value().string_value
-        input_in_kmh = self.get_parameter("input_in_kmh").get_parameter_value().bool_value
-        integration_method = self.get_parameter("integration_method").get_parameter_value().string_value
-        velocity_filter = self.get_parameter("velocity_filter").get_parameter_value().string_value
-        self.frame_id = self.get_parameter("frame_id").get_parameter_value().string_value
-        self.child_frame_id = self.get_parameter("child_frame_id").get_parameter_value().string_value
-        self.publish_3d_pose = self.get_parameter("publish_3d_pose").get_parameter_value().bool_value
-        enable_brake_filter = self.get_parameter("enable_brake_filter").get_parameter_value().bool_value
-        enable_curve_comp = self.get_parameter("enable_curve_compensation").get_parameter_value().bool_value
+        path_file_param = (
+            self.get_parameter("path_file").get_parameter_value().string_value
+        )
+        input_in_kmh = (
+            self.get_parameter("input_in_kmh").get_parameter_value().bool_value
+        )
+        integration_method = (
+            self.get_parameter("integration_method").get_parameter_value().string_value
+        )
+        velocity_filter = (
+            self.get_parameter("velocity_filter").get_parameter_value().string_value
+        )
+        self.frame_id = (
+            self.get_parameter("frame_id").get_parameter_value().string_value
+        )
+        self.child_frame_id = (
+            self.get_parameter("child_frame_id").get_parameter_value().string_value
+        )
+        self.publish_3d_pose = (
+            self.get_parameter("publish_3d_pose").get_parameter_value().bool_value
+        )
+        enable_brake_filter = (
+            self.get_parameter("enable_brake_filter").get_parameter_value().bool_value
+        )
+        enable_curve_comp = (
+            self.get_parameter("enable_curve_compensation")
+            .get_parameter_value()
+            .bool_value
+        )
 
         # ---------------------------------------------------------------------
         # Поиск и загрузка цифровой карты пути (pathgrath)
         # ---------------------------------------------------------------------
         path_file_path = self._locate_path_file(path_file_param, self.route)
-        self.straight_sections: List[StraightSection] = []
-        self.s_map: Optional[np.ndarray] = None
-        self.curv_map: Optional[np.ndarray] = None
-        self.pts_x: Optional[np.ndarray] = None
-        self.pts_y: Optional[np.ndarray] = None
-        self.pts_z: Optional[np.ndarray] = None
+        self.straight_sections: list[StraightSection] = []
+        self.s_map: np.ndarray | None = None
+        self.curv_map: np.ndarray | None = None
+        self.pts_x: np.ndarray | None = None
+        self.pts_y: np.ndarray | None = None
+        self.pts_z: np.ndarray | None = None
 
         if path_file_path and path_file_path.exists():
-            self.get_logger().info(f"Загрузка цифровой карты пути: {path_file_path.name}")
+            self.get_logger().info(
+                f"Загрузка цифровой карты пути: {path_file_path.name}"
+            )
             # Вариант 3: загружаем ВСЕ прямые участки на всем протяжении маршрута (top_n=None)
             self.straight_sections, self.s_map, self.curv_map = load_path_geometry(
-                path_file_path,
-                top_n=None
+                path_file_path, top_n=None
             )
             # Извлекаем 3D координаты точек карты для интерполяции положения
             try:
@@ -109,35 +132,45 @@ class RecoveryOdometryNode(Node):
                 if pts:
                     self.pts_x = np.array([pt["x"] for pt in pts], dtype=np.float64)
                     self.pts_y = np.array([pt["y"] for pt in pts], dtype=np.float64)
-                    self.pts_z = np.array([pt.get("z", 0.0) for pt in pts], dtype=np.float64)
+                    self.pts_z = np.array(
+                        [pt.get("z", 0.0) for pt in pts], dtype=np.float64
+                    )
             except Exception as e:
-                self.get_logger().warn(f"Не удалось распарсить 3D координаты точек: {e}")
+                self.get_logger().warn(
+                    f"Не удалось распарсить 3D координаты точек: {e}"
+                )
 
             self.get_logger().info(
                 f"Карта успешно загружена: длина {self.s_map[-1]:.1f}м, "
                 f"контрольных прямых участков на всем пути: {len(self.straight_sections)}"
             )
         else:
-            self.get_logger().warn("Цифровая карта пути не найдена. Работаем без автокалибровки по карте.")
+            self.get_logger().warn(
+                "Цифровая карта пути не найдена. Работаем без автокалибровки по карте."
+            )
 
         # ---------------------------------------------------------------------
         # Ядро резервной одометрии (с калибровкой k_scale на всем пути)
         # ---------------------------------------------------------------------
         self.estimator = PathCalibratedDeadReckoningNode(
             straight_sections=self.straight_sections,
-            path_geometry=(self.s_map, self.curv_map) if self.s_map is not None else None,
+            path_geometry=(self.s_map, self.curv_map)
+            if self.s_map is not None
+            else None,
             input_in_kmh=input_in_kmh,
             integration_method=integration_method,
             velocity_filter=velocity_filter,
             enable_brake_filter=enable_brake_filter,
-            enable_curve_compensation=enable_curve_comp
+            enable_curve_compensation=enable_curve_comp,
         )
 
         # ---------------------------------------------------------------------
         # Издатели (Publishers) согласно контракту хакатона
         # ---------------------------------------------------------------------
         qos_pub = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        self.pub_vel = self.create_publisher(VelocitySensor, "/result/velocity", qos_pub)
+        self.pub_vel = self.create_publisher(
+            VelocitySensor, "/result/velocity", qos_pub
+        )
         self.pub_pos = self.create_publisher(Odometry, "/result/position", qos_pub)
 
         # ---------------------------------------------------------------------
@@ -147,26 +180,28 @@ class RecoveryOdometryNode(Node):
             VelocitySensor,
             "/vehicle/front_bogie_velocity",
             self.cb_front_velocity,
-            qos_profile_sensor_data
+            qos_profile_sensor_data,
         )
         self.sub_rear = self.create_subscription(
             VelocitySensor,
             "/vehicle/rear_bogie_velocity",
             self.cb_rear_velocity,
-            qos_profile_sensor_data
+            qos_profile_sensor_data,
         )
         self.sub_cmd = self.create_subscription(
             DriverControllerCommand,
             "/vehicle/driver_position_cmd",
             self.cb_driver_cmd,
-            qos_profile_sensor_data
+            qos_profile_sensor_data,
         )
 
         self.msg_count = 0
         self.last_k_scale = 1.0
-        self.get_logger().info("RecoveryOdometryNode (Основное решение, Вариант 3: k_scale на всем пути) инициализирована.")
+        self.get_logger().info(
+            "RecoveryOdometryNode (Основное решение, Вариант 3: k_scale на всем пути) инициализирована."
+        )
 
-    def _locate_path_file(self, explicit_path: str, route: str) -> Optional[Path]:
+    def _locate_path_file(self, explicit_path: str, route: str) -> Path | None:
         """Определяет путь к JSON файлу цифровой карты."""
         if explicit_path:
             p = Path(explicit_path)
@@ -234,9 +269,15 @@ class RecoveryOdometryNode(Node):
         if self.publish_3d_pose and self.pts_x is not None and self.s_map is not None:
             # 3D интерполяция положения вдоль карты pathgrath
             s_cur = max(0.0, min(float(state.distance), float(self.s_map[-1])))
-            odom_msg.pose.pose.position.x = float(np.interp(s_cur, self.s_map, self.pts_x))
-            odom_msg.pose.pose.position.y = float(np.interp(s_cur, self.s_map, self.pts_y))
-            odom_msg.pose.pose.position.z = float(np.interp(s_cur, self.s_map, self.pts_z))
+            odom_msg.pose.pose.position.x = float(
+                np.interp(s_cur, self.s_map, self.pts_x)
+            )
+            odom_msg.pose.pose.position.y = float(
+                np.interp(s_cur, self.s_map, self.pts_y)
+            )
+            odom_msg.pose.pose.position.z = float(
+                np.interp(s_cur, self.s_map, self.pts_z)
+            )
         else:
             # Продольная координата по оси пути (x = R, y = 0, z = 0)
             odom_msg.pose.pose.position.x = float(state.distance)
