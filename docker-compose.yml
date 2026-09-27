@@ -10,11 +10,12 @@ services:
       - ROS_LOG_DIR=/tmp/ros2_logs
     volumes:
       - ./bags:/opt/bags:ro
-      - ./pathgrath:/opt/pathgrath:ro
+     - ./pathgrath:/opt/pathgrath:ro
     command: ["ros2", "launch", "solution", "recovery_odometry.launch.py"]
     restart: unless-stopped
 
   checker:
+    build: ./check-code
     image: check-code:humble
     container_name: tram-checker
     network_mode: host
@@ -22,12 +23,9 @@ services:
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_LOG_DIR=/tmp/ros2_logs
-    volumes:
-      - ../check-code:/workspace:ro
     working_dir: /workspace
     command: >
       bash -c "
-        source /opt/ros/humble/setup.bash &&
         source install/setup.bash &&
         ros2 run hackathon_solution_checker metrics
       "
@@ -36,6 +34,7 @@ services:
     restart: unless-stopped
 
   bag_player:
+    build: ./check-code
     image: check-code:humble
     container_name: tram-bag-player
     network_mode: host

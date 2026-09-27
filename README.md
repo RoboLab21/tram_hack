@@ -23,11 +23,6 @@ docker compose up solution
 docker compose --profile metrics up
 ```
 
-### Run multiple solution instances:
-```bash
-docker compose --profile multi up
-```
-
 ### Run with bag player for testing:
 ```bash
 docker compose --profile test up

@@ -1,0 +1,103 @@
+rosbag2_bagfile_information:
+  version: 5
+  storage_identifier: sqlite3
+  duration:
+    nanoseconds: 1309591314745
+  starting_time:
+    nanoseconds_since_epoch: 1788955803379285792
+  message_count: 117976
+  topics_with_message_count:
+  - topic_metadata:
+      name: /localization/kinematic_state
+      type: nav_msgs/msg/Odometry
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 1\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 65579
+  - topic_metadata:
+      name: /sensing/gnss/master/fix
+      type: sensor_msgs/msg/NavSatFix
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 10\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 438
+  - topic_metadata:
+      name: /sensing/gnss/master/vel
+      type: geometry_msgs/msg/TwistStamped
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 10\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 423
+  - topic_metadata:
+      name: /sensing/gnss/rover/fix
+      type: sensor_msgs/msg/NavSatFix
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 10\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 435
+  - topic_metadata:
+      name: /sensing/gnss/rover/vel
+      type: geometry_msgs/msg/TwistStamped
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 10\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 411
+  - topic_metadata:
+      name: /vehicle/rear_bogie_velocity
+      type: tram_vehicle_msgs/msg/VelocitySensor
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 1\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 12225
+  - topic_metadata:
+      name: /vehicle/driver_position_cmd
+      type: tram_vehicle_msgs/msg/DriverControllerCommand
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 1\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false\n- history: 1\n  depth: 1\n  reliability: 1\n  durability: 2\n  deadline:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n    sec: 9223372036\n\
+        \    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n    sec:\
+        \ 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions: false"
+    message_count: 26249
+  - topic_metadata:
+      name: /vehicle/front_bogie_velocity
+      type: tram_vehicle_msgs/msg/VelocitySensor
+      serialization_format: cdr
+      offered_qos_profiles: "- history: 1\n  depth: 1\n  reliability: 1\n  durability:\
+        \ 2\n  deadline:\n    sec: 9223372036\n    nsec: 854775807\n  lifespan:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  liveliness: 1\n  liveliness_lease_duration:\n\
+        \    sec: 9223372036\n    nsec: 854775807\n  avoid_ros_namespace_conventions:\
+        \ false"
+    message_count: 12216
+  compression_format: ''
+  compression_mode: ''
+  relative_file_paths:
+  - 30618_88aea4d9_0.db3
+  files:
+  - path: 30618_88aea4d9_0.db3
+    starting_time:
+      nanoseconds_since_epoch: 1788955803379285792
+    duration:
+      nanoseconds: 1309591314745
+    message_count: 166929
