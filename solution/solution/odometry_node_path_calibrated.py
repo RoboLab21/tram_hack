@@ -203,7 +203,6 @@ class PathCalibratedDeadReckoningNode:
         # Управление памятью (защита от утечки ОЗУ)
         self.record_history = record_history
         self.recent_states: deque = deque(maxlen=100)
-        self.history: List[CalibratedOdometryState] = []
 
         # Загрузка карты пути (прямые участки и профиль кривизны)
         self.straight_sections: List[StraightSection] = []
@@ -257,8 +256,6 @@ class PathCalibratedDeadReckoningNode:
         self.history_vest = deque(maxlen=self.window_size)
 
         self.recent_states.clear()
-        if self.record_history:
-            self.history.clear()
 
     def update_driver_cmd(
         self, timestamp_or_position: float | int, position: Optional[int] = None
