@@ -11,78 +11,49 @@ ROS 2 Нода оценки скорости беспилотного трамв
     /result/velocity (tram_vehicle_msgs/msg/VelocitySensor) - оцененная продольная скорость (м/с)
 """
 
-import sys
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
-
+from std_msgs.msg import String
 from tram_vehicle_msgs.msg import VelocitySensor, DriverControllerCommand
-
-try:
-    from .odometry_node_path_calibrated import PathCalibratedDeadReckoningNode
-except ImportError:
-    from odometry_node_path_calibrated import PathCalibratedDeadReckoningNode
+from .odometry_node_path_calibrated import CalibratedOdometryState, PathCalibratedDeadReckoningNode
 
 
 class VelocityNode(Node):
     def __init__(self):
         super().__init__("velocity_node")
 
-        # ---------------------------------------------------------------------
-        # Параметры ноды
-        # ---------------------------------------------------------------------
-        self.declare_parameter("input_in_kmh", True)
-        self.declare_parameter("integration_method", "trapezoidal")
-        self.declare_parameter("velocity_filter", "mean")
-        self.declare_parameter("enable_brake_filter", True)
-        self.declare_parameter("enable_curve_compensation", True)
         self.declare_parameter("child_frame_id", "base_link")
-
-        input_in_kmh = self.get_parameter("input_in_kmh").get_parameter_value().bool_value
-        integration_method = self.get_parameter("integration_method").get_parameter_value().string_value
-        velocity_filter = self.get_parameter("velocity_filter").get_parameter_value().string_value
-        enable_brake_filter = self.get_parameter("enable_brake_filter").get_parameter_value().bool_value
-        enable_curve_comp = self.get_parameter("enable_curve_compensation").get_parameter_value().bool_value
-        self.child_frame_id = self.get_parameter("child_frame_id").get_parameter_value().string_value
-
-        # ---------------------------------------------------------------------
-        # Алгоритмическое ядро оценки скорости и фильтрации сбоев
-        # ---------------------------------------------------------------------
-        self.estimator = PathCalibratedDeadReckoningNode(
-            input_in_kmh=input_in_kmh,
-            integration_method=integration_method,
-            velocity_filter=velocity_filter,
-            enable_brake_filter=enable_brake_filter,
-            enable_curve_compensation=enable_curve_comp,
-            record_history=False
+        self.child_frame_id = (
+            self.get_parameter("child_frame_id").get_parameter_value().string_value
         )
 
-        # ---------------------------------------------------------------------
-        # Издатель /result/velocity
-        # ---------------------------------------------------------------------
-        qos_pub = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        self.pub_vel = self.create_publisher(VelocitySensor, "/result/velocity", qos_pub)
+        self.estimator = PathCalibratedDeadReckoningNode()
 
-        # ---------------------------------------------------------------------
-        # Подписчики входной телеметрии
-        # ---------------------------------------------------------------------
+        qos_pub = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        self.pub_vel = self.create_publisher(
+            VelocitySensor, "/result/velocity", qos_pub
+        )
+
+        self.pub_err = self.create_publisher(String, "/result/errors", qos_pub)
+
         self.sub_front = self.create_subscription(
             VelocitySensor,
             "/vehicle/front_bogie_velocity",
             self.cb_front_velocity,
-            qos_profile_sensor_data
+            qos_profile_sensor_data,
         )
         self.sub_rear = self.create_subscription(
             VelocitySensor,
             "/vehicle/rear_bogie_velocity",
             self.cb_rear_velocity,
-            qos_profile_sensor_data
+            qos_profile_sensor_data,
         )
         self.sub_cmd = self.create_subscription(
             DriverControllerCommand,
             "/vehicle/driver_position_cmd",
             self.cb_driver_cmd,
-            qos_profile_sensor_data
+            qos_profile_sensor_data,
         )
 
         self.msg_count = 0
@@ -95,14 +66,18 @@ class VelocityNode(Node):
     def cb_front_velocity(self, msg: VelocitySensor):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         state = self.estimator.update_front(t, msg.velocity)
-        if state:
-            self._publish_velocity(msg.header.stamp, state.v_est)
+        self._publish_state(state, msg)
 
     def cb_rear_velocity(self, msg: VelocitySensor):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         state = self.estimator.update_rear(t, msg.velocity)
+        self._publish_state(state, msg)
+
+    def _publish_state(self, state: CalibratedOdometryState, msg: VelocitySensor):
         if state:
             self._publish_velocity(msg.header.stamp, state.v_est)
+            if state.fault_type != "OK":
+                self._publish_error(state.fault_type)
 
     def _publish_velocity(self, stamp, v_est: float):
         vel_msg = VelocitySensor()
@@ -114,6 +89,11 @@ class VelocityNode(Node):
         self.msg_count += 1
         if self.msg_count % 500 == 0:
             self.get_logger().info(f"V_est={v_est * 3.6:.1f} км/ч ({v_est:.2f} м/с)")
+
+    def _publish_error(self, error: str):
+        err_msg = String()
+        err_msg.data = error
+        self.pub_err.publish(err_msg)
 
 
 def main(args=None):
