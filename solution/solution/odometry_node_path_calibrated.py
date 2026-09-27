@@ -503,15 +503,52 @@ class PathCalibratedDeadReckoningNode:
         v_filt = v_raw
 
         # ---------------------------------------------------------------------
-        # 4. Фильтр активного торможения (строго driver_cmd < 0)
+        # 4. Адаптивный тормозной фильтр (с учетом положений ручки контроллера)
         # ---------------------------------------------------------------------
-        if self.enable_brake_filter and self.is_braking:
-            if v_filt < self.brake_crawl_thresh_ms:
-                v_filt = 0.0
-            if dt > 0.005:
-                a_meas = (v_filt - self.last_v_est) / dt
-                if a_meas < -self.brake_decel_limit_ms2:
-                    v_filt = max(0.0, self.last_v_est - self.brake_decel_limit_ms2 * dt)
+        if self.enable_brake_filter:
+            cmd = self.driver_cmd
+
+            if cmd < 0:
+                # Тормозные ступени: -1 .. -15
+                # Интенсивность торможения (от 1/15 при -1 до 1.0 при -15)
+                brake_ratio = abs(cmd) / 15.0
+
+                # Адаптивный порог отсечки ползучей скорости (ZUPT / Anti-crawl):
+                # - При слабом торможении (-1..-3): ~0.4 км/ч, не мешает плавному подкату
+                # - При служебном торможении (-4..-8): ~0.8 км/ч
+                # - При стоянке / экстренном (-13..-15): до 1.5 км/ч, гарантированно гасит шум колес
+                crawl_thresh = (0.4 + 1.1 * brake_ratio) / 3.6
+                if v_filt < crawl_thresh:
+                    v_filt = 0.0
+
+                # Адаптивный предел физического замедления трамвая:
+                # - При -1..-3: 1.0 - 1.4 м/с^2
+                # - При -4..-8: 1.5 - 2.0 м/с^2
+                # - При -9..-12: 2.1 - 2.5 м/с^2
+                # - При -13..-15: до 3.0 м/с^2 (МРТ / экстренное)
+                notch_decel_limit = min(
+                    self.brake_decel_limit_ms2,
+                    1.0 + 2.0 * brake_ratio,
+                )
+
+                if dt > 0.005:
+                    a_meas = (v_filt - self.last_v_est) / dt
+                    if a_meas < -notch_decel_limit:
+                        # Срыв в юз (колесо блокировано сильнее физического замедления вагона)
+                        v_filt = max(0.0, self.last_v_est - notch_decel_limit * dt)
+
+            elif cmd == 0:
+                # Положение выбега (нейтраль, качение по инерции):
+                # Допускаем замедление от сопротивления движению, уклонов и остаточного торможения
+                coast_decel_limit = self.brake_decel_limit_ms2
+                if dt > 0.005:
+                    a_meas = (v_filt - self.last_v_est) / dt
+                    if a_meas < -coast_decel_limit:
+                        v_filt = max(0.0, self.last_v_est - coast_decel_limit * dt)
+
+                # Если вагон уже стоял, удерживаем ноль против паразитного шума датчиков до явного трогания
+                if self.last_v_est == 0.0 and v_filt < (0.4 / 3.6):
+                    v_filt = 0.0
 
         # Сглаживание скорости (SMA / EMA)
         if self.velocity_filter == "sma":
@@ -572,6 +609,8 @@ class PathCalibratedDeadReckoningNode:
         else:
             delta_r = 0.0
             accel = 0.0
+            self.last_time = timestamp
+            self.last_v_est = v_est
 
         self.v_est = v_est
 
