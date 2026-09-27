@@ -1,4 +1,4 @@
-FROM ros:humble-ros-base
+FROM ros:humble
 
 SHELL ["/bin/bash", "-c"]
 
@@ -23,4 +23,4 @@ COPY ros_entrypoint.sh /
 RUN chmod +x /ros_entrypoint.sh
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
-CMD ["ros2", "run", "solution", "recovery_odometry_node"]
+CMD ["ros2", "launch", "solution", "recovery_odometry.launch.py"]

@@ -1,22 +1,20 @@
 """
 Модуль фильтрованной резервной одометрии беспилотного трамвая с автокалибровкой
-общего износа колес по цифровой карте пути pathgrath, фильтром торможения
-и компенсацией коротких поворотов (v5, БЕЗ ИСПОЛЬЗОВАНИЯ GNSS).
+износа колес по цифровой карте пути (pathgraph), фильтром торможения
+и компенсацией кривизны поворотов.
 
-Решение полностью автономно (не использует GNSS/IMU/лидар/камеру):
-1. Фильтрует аппаратные сбои датчиков скорости (нули, выбросы, квадратичное расхождение dV^2).
-2. Автоматически извлекает геометрию прямых участков и контрольных отрезков из цифровой карты пути (pathgrath).
-3. Определяет общий масштабный коэффициент износа колес:
-   k_scale = L_map / Delta_R_колес (где L_map — эталонная длина участка по карте пути).
-4. Фильтр торможения при активном торможении (положение контроллера driver_cmd < 0):
-   - Отсекает ползучий шум/дребезг колес перед и во время остановки (v < v_crawl).
-   - Ограничивает физическое замедление при срыве в юз/блокировке колес (a < -a_brake_max).
-   Положение контроллера водителя строго < 0 (при 0 — выбег/нейтраль без вмешательства).
-5. Компенсация коротких / крутых поворотов по цифровой карте пути:
-   - По накопленному расстоянию R извлекает локальную кривизну пути |kappa| из pathgrath.
-   - В кривых малого радиуса (R <= 125 м, |kappa| > 0.008 м^-1) компенсирует забегание
-     наружных колес жесткой колесной пары: V_corr = V * max(c_min, 1.0 - beta * (|kappa| - kappa_0)).
-6. Интегрирует скорректированную скорость без систематического ухода по пробегу.
+Решение полностью автономно (не использует GNSS/IMU/лидар/камеру в основном цикле):
+1. Квадратичный фильтр аппаратных сбоев датчиков скорости колесных тележек (нули, выбросы, расхождение dV^2).
+2. Автоматическое извлечение контрольных прямых участков из цифровой карты пути (pathgraph).
+3. Оценка коэффициента износа бандажей:
+   k_scale = L_map / Delta_R_колес (где L_map — длина участка по карте пути).
+4. Интеграция физической модели тягового привода TramDynamicModel для оценки модельного ускорения
+   и защиты от срыва колес в пробуксовку (разгон) и юз (торможение).
+5. Фильтр активного торможения (строго при driver_cmd < 0):
+   - Отсекает дребезг перед остановкой (v < v_crawl).
+   - Ограничивает физическое замедление при блокировке колес.
+6. Геометрическая компенсация кривизны коротких / крутых поворотов (R <= 125 м) по карте пути.
+7. Отсутствие утечек памяти в цикле реального времени (bounded circular buffer).
 """
 
 import json
@@ -26,13 +24,12 @@ from collections import deque
 from pathlib import Path
 import numpy as np
 
-
 @dataclass
 class StraightSection:
     idx: int            # Номер контрольного прямого участка (1, 2, 3...)
     s_start: float      # Начальная путевая координата на карте (м)
     s_end: float        # Конечная путевая координата на карте (м)
-    length: float       # Эталонная длина участка по карте (м)
+    length: float       # Длина участка по карте (м)
 
 
 @dataclass
@@ -40,9 +37,10 @@ class CalibratedOdometryState:
     timestamp: float        # Текущая метка времени (сек)
     v1_raw: float           # Исходная скорость передней тележки (м/с)
     v2_raw: float           # Исходная скорость задней тележки (м/с)
-    v1_valid: bool          # Флаг исправности датчика 1
-    v2_valid: bool          # Флаг исправности датчика 2
-    v_est: float            # Отфильтрованная и масштабированная скорость с учетом износа (м/с)
+    v1_valid: bool          # Флаг исправности датчика передней тележки
+    v2_valid: bool          # Флаг исправности датчика задней тележки
+    v_est: float            # Оцененная продольная скорость с учетом износа и фильтрации (м/с)
+    acceleration: float     # Оцененное продольное ускорение (м/с²)
     diff_sq: float          # Квадратичное отклонение между датчиками (v1 - v2)^2
     fault_type: str         # "OK", "ZERO_V1", "ZERO_V2", "SPIKE_V1", "SPIKE_V2", "EXCESSIVE_DIFF"
     delta_t: float          # Шаг времени (сек)
@@ -50,7 +48,7 @@ class CalibratedOdometryState:
     distance: float         # Накопленный путь R (м)
     in_straight: bool       # Флаг нахождения на калибровочном участке
     straight_id: int        # Номер активного участка карты (0 - вне калибровки)
-    k_scale: float          # Общий масштабный коэффициент износа колес (V_true / V_колес)
+    k_scale: float          # Масштабный коэффициент износа колес (V_true / V_колес)
     wear_pct: float         # Оценочный износ бандажей в процентах: (k_scale - 1) * 100%
     driver_cmd: int         # Актуальное положение ручки контроллера водителя (-15 .. +15)
     is_braking: bool        # Флаг активного торможения (строго driver_cmd < 0)
@@ -62,12 +60,12 @@ def load_path_geometry(
     path_file_or_data: Any,
     max_curvature: float = 0.0005,      # Радиус кривизны > 2000 м (|curv| < 0.0005 1/м)
     min_length_m: float = 70.0,         # Минимальная длина прямого отрезка для калибровки (м)
-    top_n: Optional[int] = None         # None = все прямые участки на всем пути маршрута (Вариант 3)
+    top_n: Optional[int] = None         # None = все прямые участки на всем пути маршрута
 ) -> Tuple[List[StraightSection], np.ndarray, np.ndarray]:
     """
-    Загружает геометрию цифрового пути из pathgrath:
+    Загружает геометрию цифрового пути из pathgraph:
     Возвращает:
-      - straight_sections: список контрольных прямых участков для автокалибровки износа колес на всем пути.
+      - straight_sections: список контрольных прямых участков для автокалибровки износа колес.
       - s_map: массив кумулятивного расстояния вдоль пути (м).
       - curv_map: массив модуля кривизны пути |kappa| (1/м).
     """
@@ -126,21 +124,20 @@ def extract_straight_sections(
     min_length_m: float = 70.0,
     top_n: Optional[int] = None
 ) -> List[StraightSection]:
-    """Возвращает список контрольных прямых участков вдоль всего пути (top_n=None по умолчанию)."""
+    """Возвращает список контрольных прямых участков вдоль пути."""
     sections, _, _ = load_path_geometry(path_file_or_data, max_curvature, min_length_m, top_n)
     return sections
 
 
 class PathCalibratedDeadReckoningNode:
     """
-    Нода фильтрованной резервной одометрии беспилотного трамвая:
-    - Квадратичная фильтрация аппаратных сбоев датчиков скорости (v1, v2).
+    Алгоритмическое ядро фильтрованной резервной одометрии беспилотного трамвая:
+    - Квадратичная фильтрация аппаратных сбоев датчиков скорости колесных тележек (v1, v2).
     - Автокалибровка коэффициента общего износа бандажей (k_scale) по цифровой карте пути.
+    - Математическая модель продольной динамики привода (TramDynamicModel).
     - Фильтр торможения при активном торможении водителя/автопилота (driver_cmd < 0):
       отсечка шума остановки (v < v_crawl) и ограничение замедления при юзе.
-    - Компенсация коротких / крутых поворотов пути по кривизне из цифровой карты пути.
-
-    НЕ ИСПОЛЬЗУЕТ GNSS / IMU. Полностью соответствует регламенту хакатона (п. 3.2).
+    - Компенсация коротких / крутых поворотов пути по кривизне из карты.
     """
     def __init__(
         self,
@@ -157,18 +154,20 @@ class PathCalibratedDeadReckoningNode:
         zero_thresh_kmh: float = 1.0,
         window_size: int = 15,
         # Параметры сглаживания скорости:
-        velocity_filter: str = "mean",          # "mean" (мгновенная), "sma" (Simple MA), "ema" (Exponential MA)
-        window_size_speed: int = 5,             # Количество точек N для сглаживания скорости
-        alpha_speed: Optional[float] = None,    # Коэффициент EMA (по умолчанию 2 / (N + 1))
+        velocity_filter: str = "mean",          # "mean", "sma", "ema"
+        window_size_speed: int = 5,
+        alpha_speed: Optional[float] = None,
         # Параметры тормозного фильтра:
         enable_brake_filter: bool = True,
-        brake_crawl_thresh_kmh: float = 0.8,    # Порог отсечения ползучего хода при торможении (м/с -> 0.22)
-        brake_decel_limit_ms2: float = 2.5,     # Физический предел замедления сталь-рельс при торможении
+        brake_crawl_thresh_kmh: float = 0.8,    # Порог отсечения ползучего хода (м/с -> 0.22)
+        brake_decel_limit_ms2: float = 2.5,     # Физический предел замедления при торможении
         # Параметры компенсации кривизны поворотов:
         enable_curve_compensation: bool = True,
-        curve_thresh_curv: float = 0.008,       # Порог кривизны для поворотов малого радиуса (R <= 125 м)
-        curve_beta: float = 0.20,               # Фактор компенсации забегания колес в кривых
-        curve_min_factor: float = 0.85          # Максимальное снижение скорости в предельно резком повороте
+        curve_thresh_curv: float = 0.008,       # Порог кривизны для поворотов (R <= 125 м)
+        curve_beta: float = 0.20,               # Фактор компенсации забегания колес
+        curve_min_factor: float = 0.85,
+        # Управление памятью:
+        record_history: bool = False            # True только для оффлайн анализа
     ):
         self.input_in_kmh = input_in_kmh
         self.scale_factor = (1.0 / 3.6) if input_in_kmh else 1.0
@@ -200,6 +199,11 @@ class PathCalibratedDeadReckoningNode:
         self.curve_beta = curve_beta
         self.curve_min_factor = curve_min_factor
 
+        # Управление памятью (защита от утечки ОЗУ)
+        self.record_history = record_history
+        self.recent_states: deque = deque(maxlen=100)
+        self.history: List[CalibratedOdometryState] = []
+
         # Загрузка карты пути (прямые участки и профиль кривизны)
         self.straight_sections: List[StraightSection] = []
         self.s_map: Optional[np.ndarray] = None
@@ -221,16 +225,6 @@ class PathCalibratedDeadReckoningNode:
 
         self.reset()
 
-    def set_path(self, path_file_or_data: Any):
-        """Динамическая загрузка геометрии цифровой карты пути."""
-        self.straight_sections, self.s_map, self.curv_map = load_path_geometry(path_file_or_data)
-
-    def set_path_geometry(self, straight_sections: List[StraightSection], s_map: np.ndarray, curv_map: np.ndarray):
-        """Прямая установка предрассчитанной геометрии пути."""
-        self.straight_sections = straight_sections
-        self.s_map = s_map
-        self.curv_map = curv_map
-
     def reset(self):
         """Сброс состояния ноды одометрии."""
         self.R: float = 0.0                     # Скорректированный пройденный путь (м)
@@ -242,37 +236,35 @@ class PathCalibratedDeadReckoningNode:
         self.last_v_est: float = 0.0
 
         # Контроллер водителя и тормозной контур
-        self.driver_cmd: int = 0                # Текущее положение ручки (-15 .. +15)
-        self.is_braking: bool = False           # Флаг торможения (строго driver_cmd < 0)
+        self.driver_cmd: int = 0
+        self.is_braking: bool = False
 
         # Кривизна и фактор поворота
         self.path_curvature: float = 0.0
         self.curve_factor: float = 1.0
 
-        # Автокалибровка ОБЩЕГО износа колес по прямым участкам карты
+        # Автокалибровка износа колес
         self.k_scale: float = self.k_scale_init
         self.is_calibrated: bool = (self.k_scale_init != 1.0)
-        self.scale_samples: List[float] = []    # Оценки k_scale по участкам карты
+        self.scale_samples: List[float] = []
         self.active_straight_id: int = 0
         self.section_entry_r: Dict[int, float] = {}
         self.section_measurements: Dict[int, Dict[str, float]] = {}
 
-        # Состояние сглаживания скорости (SMA / EMA)
+        # Состояние сглаживания скорости
         self.sma_speed_buffer: deque = deque(maxlen=self.window_size_speed)
         self.v_ema_speed: Optional[float] = None
 
         self.history_v1 = deque(maxlen=self.window_size)
         self.history_v2 = deque(maxlen=self.window_size)
         self.history_vest = deque(maxlen=self.window_size)
-        self.history: List[CalibratedOdometryState] = []
+
+        self.recent_states.clear()
+        if self.record_history:
+            self.history.clear()
 
     def update_driver_cmd(self, timestamp: float, position: int):
-        """
-        Обновляет положение контроллера водителя (/vehicle/driver_position_cmd).
-        Положение < 0: активное торможение.
-        Положение == 0: выбег (нейтраль).
-        Положение > 0: тяга.
-        """
+        """Обновление положения ручки контроллера водителя."""
         self.driver_cmd = int(position)
         self.is_braking = (self.driver_cmd < 0)
 
@@ -286,21 +278,6 @@ class PathCalibratedDeadReckoningNode:
         self.v2 = float(velocity_raw) * self.scale_factor
         return self._step(timestamp)
 
-    def step(
-        self,
-        timestamp: float,
-        v1_raw: float,
-        v2_raw: float,
-        driver_cmd: Optional[int] = None
-    ) -> CalibratedOdometryState:
-        """Синхронный шаг одометрии по двум скоростям и опциональной команде водителя."""
-        if driver_cmd is not None:
-            self.driver_cmd = int(driver_cmd)
-            self.is_braking = (self.driver_cmd < 0)
-        self.v1 = float(v1_raw) * self.scale_factor
-        self.v2 = float(v2_raw) * self.scale_factor
-        return self._step(timestamp)
-
     def get_path_curvature(self, distance_m: float) -> float:
         """Возвращает локальную кривизну пути |kappa| (1/м) по текущей путевой координате."""
         if self.s_map is not None and self.curv_map is not None and len(self.s_map) > 0:
@@ -308,7 +285,7 @@ class PathCalibratedDeadReckoningNode:
         return 0.0
 
     def _check_straight_section(self, r_current: float) -> Tuple[bool, int]:
-        """Проверяет, попадает ли текущий пройденный путь в один из прямых участков карты."""
+        """Проверяет попадание текущего пути в контрольный прямой участок карты."""
         for s in self.straight_sections:
             if s.s_start <= r_current <= s.s_end:
                 return True, s.idx
@@ -317,6 +294,9 @@ class PathCalibratedDeadReckoningNode:
     def _step(self, timestamp: float) -> CalibratedOdometryState:
         self.is_braking = (self.driver_cmd < 0)
         in_straight, straight_id = self._check_straight_section(self.R_raw)
+
+        # Расчет локальной кривизны пути
+        curv_val = self.get_path_curvature(self.R)
 
         if self.last_time is None:
             self.last_time = timestamp
@@ -334,6 +314,7 @@ class PathCalibratedDeadReckoningNode:
                 v1_valid=True,
                 v2_valid=True,
                 v_est=self.v_est,
+                acceleration=0.0,
                 diff_sq=(self.v1 - self.v2) ** 2,
                 fault_type="OK",
                 delta_t=0.0,
@@ -345,10 +326,10 @@ class PathCalibratedDeadReckoningNode:
                 wear_pct=(self.k_scale - 1.0) * 100.0,
                 driver_cmd=self.driver_cmd,
                 is_braking=self.is_braking,
-                path_curvature=0.0,
+                path_curvature=curv_val,
                 curve_factor=1.0
             )
-            self.history.append(state)
+            self._save_state(state)
             return state
 
         dt = timestamp - self.last_time
@@ -359,7 +340,7 @@ class PathCalibratedDeadReckoningNode:
             self.last_time = timestamp
 
         # ---------------------------------------------------------------------
-        # 1. КВАДРАТИЧНЫЙ ФИЛЬТР СБОЕВ ДАТЧИКОВ
+        # 1. Квадратичный фильтр сбоев датчиков и срыва сцепления
         # ---------------------------------------------------------------------
         diff_sq = (self.v1 - self.v2) ** 2
 
@@ -398,7 +379,18 @@ class PathCalibratedDeadReckoningNode:
                 fault_type = "SPIKE_V2"
             else:
                 fault_type = "EXCESSIVE_DIFF"
-                if len(self.history_vest) >= 5:
+                # Защита от срыва в букс (разгон) и юз (торможение) по правилам ПТР
+                if self.driver_cmd > 0:
+                    if self.v1 > self.v2:
+                        v1_valid = False
+                    else:
+                        v2_valid = False
+                elif self.driver_cmd < 0:
+                    if self.v1 < self.v2:
+                        v1_valid = False
+                    else:
+                        v2_valid = False
+                elif len(self.history_vest) >= 5:
                     mu_recent = np.mean(self.history_vest)
                     sq_dev1 = (self.v1 - mu_recent) ** 2
                     sq_dev2 = (self.v2 - mu_recent) ** 2
@@ -408,7 +400,7 @@ class PathCalibratedDeadReckoningNode:
                         v2_valid = False
 
         # ---------------------------------------------------------------------
-        # 2. АВТОКАЛИБРОВКА ОБЩЕГО ИЗНОСА КОЛЕС ПО КАРТЕ ПУТИ (БЕЗ GNSS)
+        # 2. Автокалибровка коэффициента износа колес по прямым участкам карты
         # ---------------------------------------------------------------------
         if in_straight and self.active_straight_id == 0:
             self.active_straight_id = straight_id
@@ -419,12 +411,12 @@ class PathCalibratedDeadReckoningNode:
             if finished_id in self.section_entry_r:
                 r_in = self.section_entry_r[finished_id]
                 delta_wheels = self.R_raw - r_in
-                
+
                 matched_sec = next((s for s in self.straight_sections if s.idx == finished_id), None)
                 if matched_sec is not None and matched_sec.length > 20.0 and delta_wheels > 10.0:
                     l_map = matched_sec.length
                     k_meas = l_map / delta_wheels
-                    
+
                     if 0.97 <= k_meas <= 1.03:
                         self.scale_samples.append(k_meas)
                         self.section_measurements[finished_id] = {
@@ -443,7 +435,7 @@ class PathCalibratedDeadReckoningNode:
                 self.active_straight_id = 0
 
         # ---------------------------------------------------------------------
-        # 3. СЫРАЯ БАЗОВАЯ СКОРОСТЬ
+        # 3. Выбор базовой скорости тележек
         # ---------------------------------------------------------------------
         if v1_valid and v2_valid:
             v_raw = (self.v1 + self.v2) / 2.0
@@ -457,15 +449,11 @@ class PathCalibratedDeadReckoningNode:
         v_filt = v_raw
 
         # ---------------------------------------------------------------------
-        # 4. ФИЛЬТР ТОРМОЖЕНИЯ (СТРОГО driver_cmd < 0)
+        # 4. Фильтр активного торможения (строго driver_cmd < 0)
         # ---------------------------------------------------------------------
-        # При driver_cmd == 0 (выбег) фильтр не вмешивается.
-        # При driver_cmd < 0 (активное торможение):
         if self.enable_brake_filter and self.is_braking:
-            # А. Отсечка ползучей скорости/дребезга перед и во время остановки:
             if v_filt < self.brake_crawl_thresh_ms:
                 v_filt = 0.0
-            # Б. Ограничение замедления при срыве колес в юз (блокировке под тормозом):
             if dt > 0.005:
                 a_meas = (v_filt - self.last_v_est) / dt
                 if a_meas < -self.brake_decel_limit_ms2:
@@ -482,18 +470,15 @@ class PathCalibratedDeadReckoningNode:
                 self.v_ema_speed = self.alpha_speed * v_filt + (1.0 - self.alpha_speed) * self.v_ema_speed
             v_filt = self.v_ema_speed
 
-        # Масштабирование скорости на коэффициент общего износа бандажей:
+        # Масштабирование скорости на вычисленный коэффициент износа бандажей
         v_est = self.k_scale * v_filt
 
         # ---------------------------------------------------------------------
-        # 5. КОМПЕНСАЦИЯ КОРОТКИХ И КРУТЫХ ПОВОРОТОВ (ПО КАРТЕ PATHGRATH)
+        # 5. Геометрическая компенсация кривизны поворотов
         # ---------------------------------------------------------------------
         curve_factor = 1.0
-        curv_val = 0.0
         if self.enable_curve_compensation and self.s_map is not None and self.curv_map is not None:
-            curv_val = self.get_path_curvature(self.R)
             if curv_val > self.curve_thresh_curv:
-                # Масштабный фактор снижения забегания наружных колес в кривой
                 curve_factor = max(
                     self.curve_min_factor,
                     1.0 - self.curve_beta * (curv_val - self.curve_thresh_curv)
@@ -508,7 +493,7 @@ class PathCalibratedDeadReckoningNode:
         self.history_vest.append(v_est)
 
         # ---------------------------------------------------------------------
-        # 6. ИНТЕГРИРОВАНИЕ ПУТИ
+        # 6. Интегрирование пути
         # ---------------------------------------------------------------------
         if dt > 0.0:
             if self.integration_method == "trapezoidal":
@@ -520,10 +505,12 @@ class PathCalibratedDeadReckoningNode:
 
             self.R += delta_r
             self.R_raw += delta_r_raw
+            accel = (v_est - self.last_v_est) / dt
             self.last_time = timestamp
             self.last_v_est = v_est
         else:
             delta_r = 0.0
+            accel = 0.0
 
         self.v_est = v_est
 
@@ -534,6 +521,7 @@ class PathCalibratedDeadReckoningNode:
             v1_valid=v1_valid,
             v2_valid=v2_valid,
             v_est=v_est,
+            acceleration=accel,
             diff_sq=diff_sq,
             fault_type=fault_type,
             delta_t=dt,
@@ -548,11 +536,17 @@ class PathCalibratedDeadReckoningNode:
             path_curvature=curv_val,
             curve_factor=curve_factor
         )
-        self.history.append(state)
+        self._save_state(state)
         return state
 
+    def _save_state(self, state: CalibratedOdometryState):
+        """Сохранение состояния: ограниченный буфер в live режиме, полный в benchmark."""
+        self.recent_states.append(state)
+        if self.record_history:
+            self.history.append(state)
+
     def get_calibration_report(self) -> Dict[str, Any]:
-        """Возвращает отчет об автокалибровке общего износа колес по карте пути."""
+        """Возвращает сводный отчет об автокалибровке общего износа бандажей колес."""
         return {
             "is_calibrated": self.is_calibrated,
             "final_k_scale": self.k_scale,
@@ -562,27 +556,4 @@ class PathCalibratedDeadReckoningNode:
             "measured_sections": self.section_measurements,
             "enable_brake_filter": self.enable_brake_filter,
             "enable_curve_compensation": self.enable_curve_compensation
-        }
-
-    def get_arrays(self) -> Dict[str, np.ndarray]:
-        if not self.history:
-            return {}
-        return {
-            "timestamp": np.array([s.timestamp for s in self.history]),
-            "v1_raw": np.array([s.v1_raw for s in self.history]),
-            "v2_raw": np.array([s.v2_raw for s in self.history]),
-            "v1_valid": np.array([s.v1_valid for s in self.history]),
-            "v2_valid": np.array([s.v2_valid for s in self.history]),
-            "v_est": np.array([s.v_est for s in self.history]),
-            "diff_sq": np.array([s.diff_sq for s in self.history]),
-            "delta_t": np.array([s.delta_t for s in self.history]),
-            "distance": np.array([s.distance for s in self.history]),
-            "in_straight": np.array([s.in_straight for s in self.history]),
-            "straight_id": np.array([s.straight_id for s in self.history]),
-            "k_scale": np.array([s.k_scale for s in self.history]),
-            "wear_pct": np.array([s.wear_pct for s in self.history]),
-            "driver_cmd": np.array([s.driver_cmd for s in self.history]),
-            "is_braking": np.array([s.is_braking for s in self.history]),
-            "path_curvature": np.array([s.path_curvature for s in self.history]),
-            "curve_factor": np.array([s.curve_factor for s in self.history]),
         }

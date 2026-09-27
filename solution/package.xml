@@ -2,19 +2,26 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>solution</name>
-  <version>0.1.0</version>
-  <description>Tram odometry solution</description>
-  <maintainer email="user@example.com">User</maintainer>
+  <version>1.0.0</version>
+  <description>Backup odometry and path tracking of an unmanned tram using a mathematical model and wheel sensors.</description>
+  <maintainer email="makar6002@mail.ru">DecideOnSaturday Team</maintainer>
+  <maintainer email="makar6002@mail.ru">Makar Goncharov</maintainer>
+  <maintainer email="so02s@mail.ru">Sofya Ponomareva</maintainer>
+  <maintainer email="rexpredalor@gmail.com">Alexashin Dmitry</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
+  <depend>std_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>tram_vehicle_msgs</depend>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>
