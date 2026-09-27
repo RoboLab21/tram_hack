@@ -10,7 +10,7 @@ services:
       - ROS_LOG_DIR=/tmp/ros2_logs
     volumes:
       - ./bags:/opt/bags:ro
-     - ./pathgrath:/opt/pathgrath:ro
+      - ./pathgrath:/opt/pathgrath:ro
     command: ["ros2", "launch", "solution", "recovery_odometry.launch.py"]
     restart: unless-stopped
 
@@ -43,7 +43,7 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_LOG_DIR=/tmp/ros2_logs
     volumes:
-      - ./bags:/opt/bags:ro
+      - ./check-code/bags:/opt/bags:ro
       - ../check-code/src/tram_vehicle_msgs:/opt/tram_vehicle_msgs:ro
     working_dir: /opt
     command: >
