@@ -16,12 +16,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from tram_vehicle_msgs.msg import VelocitySensor, DriverControllerCommand
-from odometry_node_path_calibrated import CalibratedOdometryState
-
-try:
-    from .odometry_node_path_calibrated import PathCalibratedDeadReckoningNode
-except ImportError:
-    from odometry_node_path_calibrated import PathCalibratedDeadReckoningNode
+from .odometry_node_path_calibrated import CalibratedOdometryState, PathCalibratedDeadReckoningNode
 
 
 class VelocityNode(Node):
