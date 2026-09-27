@@ -1,0 +1,59 @@
+services:
+  solution:
+    build: .
+    image: tram-solution:humble
+    container_name: tram-solution
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOG_DIR=/tmp/ros2_logs
+    volumes:
+      - ./bags:/opt/bags:ro
+      - ./pathgrath:/opt/pathgrath:ro
+    command: ["ros2", "run", "solution", "recovery_odometry_node", "--ros-args", "-p", "path_file:=/opt/pathgrath/щукинская - таллинская.json"]
+    restart: unless-stopped
+
+  checker:
+    image: check-code:humble
+    container_name: tram-checker
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOG_DIR=/tmp/ros2_logs
+    volumes:
+      - ../check-code:/workspace:ro
+    working_dir: /workspace
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        colcon build --packages-select tram_vehicle_msgs hackathon_solution_checker &&
+        source install/setup.bash &&
+        ros2 run hackathon_solution_checker metrics
+      "
+    profiles:
+      - metrics
+    restart: unless-stopped
+
+  bag_player:
+    image: check-code:humble
+    container_name: tram-bag-player
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOG_DIR=/tmp/ros2_logs
+    volumes:
+      - ./bags:/opt/bags:ro
+      - ../check-code/src/tram_vehicle_msgs:/opt/tram_vehicle_msgs:ro
+    working_dir: /opt
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        mkdir -p /opt/ws/src && cp -r /opt/tram_vehicle_msgs /opt/ws/src/ &&
+        cd /opt/ws && colcon build --packages-select tram_vehicle_msgs &&
+        source install/setup.bash &&
+        echo 'Bag player ready. Use: docker exec -it tram-bag-player ros2 bag play /opt/bags/<bag_name>' &&
+        sleep infinity
+      "
+    profiles:
+      - test
+    restart: unless-stopped
